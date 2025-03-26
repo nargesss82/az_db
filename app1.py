@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import pyodbc
+import pymssql
 from datetime import datetime
 
 # App configuration
@@ -10,32 +10,29 @@ st.title("Cryptocurrency Trading Management System")
 # Database configuration
 DB_CONFIG = {
     'server': '78.38.35.219',
-    'database': 'G2',
-    'username': 'G2',
+    'user': 'G2',
     'password': 'g2',
-    'driver': '{ODBC Driver 17 for SQL Server}',
-    'timeout': 60
+    'database': 'G2',
+    'port': 1433,
+    'charset': 'utf8',
+    'as_dict': True
 }
 
 
 def create_connection():
-    """Create and return a database connection with error handling"""
+    """Create database connection with error handling"""
     try:
-        conn_str = f"""
-            DRIVER={DB_CONFIG['driver']};
-            SERVER={DB_CONFIG['server']};
-            DATABASE={DB_CONFIG['database']};
-            UID={DB_CONFIG['username']};
-            PWD={DB_CONFIG['password']};
-            Connect Timeout={DB_CONFIG['timeout']};
-        """
-        return pyodbc.connect(conn_str)
-    except pyodbc.Error as e:
+        conn = pymssql.connect(**DB_CONFIG)
+        return conn
+    except pymssql.Error as e:
         st.error(f"Database connection error: {str(e)}")
+        return None
+    except Exception as e:
+        st.error(f"Unexpected error: {str(e)}")
         return None
 
 
-# Database fetch functions
+# Data retrieval functions
 def fetch_strategies():
     """Fetch list of trading strategies"""
     conn = create_connection()
@@ -45,8 +42,8 @@ def fetch_strategies():
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT DISTINCT strategy_name FROM Strategy_Type")
-            return [row[0] for row in cursor.fetchall()]
-    except pyodbc.Error as e:
+            return [row['strategy_name'] for row in cursor.fetchall()]
+    except pymssql.Error as e:
         st.error(f"Error fetching strategies: {str(e)}")
         return []
     finally:
@@ -62,8 +59,8 @@ def fetch_currencies():
     try:
         with conn.cursor() as cursor:
             cursor.execute("SELECT DISTINCT currency_symbol FROM Currencies")
-            return [row[0] for row in cursor.fetchall()]
-    except pyodbc.Error as e:
+            return [row['currency_symbol'] for row in cursor.fetchall()]
+    except pymssql.Error as e:
         st.error(f"Error fetching currencies: {str(e)}")
         return []
     finally:
@@ -85,8 +82,8 @@ def fetch_strategy_currencies():
                 JOIN Strategy_Type st ON sc.strategy_type_id = st.strategy_type_id
                 JOIN Currencies c ON sc.currency_id = c.currency_id
             """)
-            return {row[0]: row[1] for row in cursor.fetchall()}
-    except pyodbc.Error as e:
+            return {row['strategy_currency_id']: row['display_name'] for row in cursor.fetchall()}
+    except pymssql.Error as e:
         st.error(f"Error fetching strategy currencies: {str(e)}")
         return {}
     finally:
@@ -120,22 +117,19 @@ if menu == "View Database Views":
             with conn.cursor() as cursor:
                 if view_option == "Active Exchange Users":
                     cursor.execute("SELECT * FROM ActiveExchangeUsers")
-                    df = pd.DataFrame.from_records(cursor.fetchall(),
-                                                   columns=[column[0] for column in cursor.description])
+                    df = pd.DataFrame(cursor.fetchall())
                     st.dataframe(df)
 
                 elif view_option == "Best Orders By Strategy-Currency":
                     cursor.execute("SELECT * FROM Best_Order_By_Strategy_Currency")
-                    df = pd.DataFrame.from_records(cursor.fetchall(),
-                                                   columns=[column[0] for column in cursor.description])
+                    df = pd.DataFrame(cursor.fetchall())
                     st.dataframe(df)
 
                 elif view_option == "User Exchange Trade Volume":
                     cursor.execute("SELECT * FROM User_Exchange_Trade_Volume")
-                    df = pd.DataFrame.from_records(cursor.fetchall(),
-                                                   columns=[column[0] for column in cursor.description])
+                    df = pd.DataFrame(cursor.fetchall())
                     st.dataframe(df)
-        except pyodbc.Error as e:
+        except pymssql.Error as e:
             st.error(f"Error loading view: {str(e)}")
         finally:
             conn.close()
@@ -177,9 +171,9 @@ elif menu == "Execute Functions":
                         ) AS SignalCount
                         """
                         cursor.execute(query)
-                        result = cursor.fetchone()[0]
+                        result = cursor.fetchone()['SignalCount']
                         st.success(f"Signal Count: {result}")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Execution error: {str(e)}")
                 finally:
                     conn.close()
@@ -195,9 +189,9 @@ elif menu == "Execute Functions":
                     with conn.cursor() as cursor:
                         query = f"SELECT dbo.GetStrategyFollowersCount('{strategy_name}') AS FollowerCount"
                         cursor.execute(query)
-                        result = cursor.fetchone()[0]
+                        result = cursor.fetchone()['FollowerCount']
                         st.success(f"Followers: {result}")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Execution error: {str(e)}")
                 finally:
                     conn.close()
@@ -225,13 +219,12 @@ elif menu == "Execute Functions":
                         cursor.execute(query)
                         data = cursor.fetchall()
                         if data:
-                            df = pd.DataFrame.from_records(data,
-                                                           columns=[column[0] for column in cursor.description])
+                            df = pd.DataFrame(data)
                             st.dataframe(df)
                             st.success(f"Users Found: {len(df)}")
                         else:
                             st.warning("No users found")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Execution error: {str(e)}")
                 finally:
                     conn.close()
@@ -264,17 +257,11 @@ elif menu == "Run Stored Procedures":
             if conn:
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(f"""
-                        EXEC dbo.Add_Exchange_For_User
-                            @UserId = {user_id},
-                            @ExchangeID = {exchange_id},
-                            @ApiKey = '{api_key}',
-                            @ApiSecret = '{api_secret}',
-                            @TotalBalance = {total_balance}
-                        """)
+                        cursor.callproc('dbo.Add_Exchange_For_User',
+                                        (user_id, exchange_id, api_key, api_secret, total_balance))
                         conn.commit()
                         st.success("Exchange added successfully")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Error: {str(e)}")
                 finally:
                     conn.close()
@@ -299,15 +286,11 @@ elif menu == "Run Stored Procedures":
             if conn:
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(f"""
-                        EXEC dbo.Add_Strategy_For_User
-                            @UserID = {user_id},
-                            @Strategy_Currency_ID = {strategy_currency_id},
-                            @SubBalance = {sub_balance}
-                        """)
+                        cursor.callproc('dbo.Add_Strategy_For_User',
+                                        (user_id, strategy_currency_id, sub_balance))
                         conn.commit()
                         st.success("Strategy added successfully")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Error: {str(e)}")
                 finally:
                     conn.close()
@@ -330,14 +313,11 @@ elif menu == "Run Stored Procedures":
             if conn:
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(f"""
-                        EXEC dbo.Enabling_User_Strategy
-                            @UserID = {user_id},
-                            @Strategy_Currency_ID = {strategy_currency_id}
-                        """)
+                        cursor.callproc('dbo.Enabling_User_Strategy',
+                                        (user_id, strategy_currency_id))
                         conn.commit()
                         st.success("Strategy enabled successfully")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Error: {str(e)}")
                 finally:
                     conn.close()
@@ -360,14 +340,11 @@ elif menu == "Run Stored Procedures":
             if conn:
                 try:
                     with conn.cursor() as cursor:
-                        cursor.execute(f"""
-                        EXEC dbo.Disabling_User_Strategy
-                            @UserID = {user_id},
-                            @Strategy_Currency_ID = {strategy_currency_id}
-                        """)
+                        cursor.callproc('dbo.Disabling_User_Strategy',
+                                        (user_id, strategy_currency_id))
                         conn.commit()
                         st.success("Strategy disabled successfully")
-                except pyodbc.Error as e:
+                except pymssql.Error as e:
                     st.error(f"Error: {str(e)}")
                 finally:
                     conn.close()
@@ -380,7 +357,7 @@ elif menu == "Run Stored Procedures":
             try:
                 with conn.cursor() as cursor:
                     cursor.execute("SELECT exchange_id, exchange_name FROM Exchanges")
-                    exchanges = {row[0]: row[1] for row in cursor.fetchall()}
+                    exchanges = {row['exchange_id']: row['exchange_name'] for row in cursor.fetchall()}
 
                     if exchanges:
                         exchange_id = st.selectbox(
@@ -391,17 +368,14 @@ elif menu == "Run Stored Procedures":
 
                         if st.button("Delete", type="primary"):
                             try:
-                                cursor.execute(f"""
-                                EXEC dbo.Delete_Exchange
-                                    @ExchangeID = {exchange_id}
-                                """)
+                                cursor.callproc('dbo.Delete_Exchange', (exchange_id,))
                                 conn.commit()
                                 st.success("Exchange deleted successfully")
-                            except pyodbc.Error as e:
+                            except pymssql.Error as e:
                                 st.error(f"Delete error: {str(e)}")
                     else:
                         st.warning("No exchanges available")
-            except pyodbc.Error as e:
+            except pymssql.Error as e:
                 st.error(f"Error loading exchanges: {str(e)}")
             finally:
                 conn.close()
