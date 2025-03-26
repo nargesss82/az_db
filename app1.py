@@ -14,7 +14,7 @@ DB_CONFIG = {
     'username': 'G2',
     'password': 'g2',
     'driver': '{ODBC Driver 17 for SQL Server}',
-    'timeout': 30
+    'timeout': 60
 }
 
 
