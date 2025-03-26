@@ -11,7 +11,7 @@ def get_connection():
     username = 'G2'
     password = 'g2'
     return pyodbc.connect(
-        f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}'
+        f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password};Connect Timeout=30'
     )
 
 
